@@ -42,13 +42,16 @@ async function reload(silent=false){
 }
 function votesFor(id){return state.scores.filter(s=>s.contestant_id===id && state.judges.some(j=>j.id===s.judge_id&&j.is_active));}
 function stats(c){
- const votes=votesFor(c.id);const a=state.judges.filter(j=>j.judge_group==='undergraduate'&&j.is_active);
+ const votes=votesFor(c.id);
+ const a=state.judges.filter(j=>j.judge_group==='undergraduate'&&j.is_active);
  const b=state.judges.filter(j=>j.judge_group==='graduate'&&j.is_active);
- const u=votes.filter(s=>a.some(j=>j.id===s.judge_id));const g=votes.filter(s=>b.some(j=>j.id===s.judge_id));
- const avg=ss=>ss.length?ss.reduce((x,s)=>x+Number(s.total),0)/ss.length:null;
- const uavg=avg(u),gavg=avg(g),p=c.professional_score==null?null:Number(c.professional_score);
- const w=state.settings;const final=(p!=null&&gavg!=null&&uavg!=null)?p*Number(w.weight_professional)+gavg*Number(w.weight_graduate)+uavg*Number(w.weight_undergraduate):null;
- return {uavg,gavg,final,ucount:u.length,gcount:g.length,utotal:a.length,gtotal:b.length,submitted:votes.length};
+ const u=votes.filter(s=>a.some(j=>j.id===s.judge_id)),g=votes.filter(s=>b.some(j=>j.id===s.judge_id));
+ const avg=items=>items.length?items.reduce((sum,s)=>sum+Number(s.total),0)/items.length:null;
+ const uavg=avg(u),gavg=avg(g);
+ // 大众评委仅占赛事总评分的30%；百分制大众综合分为本研组加权均分。
+ const publicContribution=(gavg!==null&&uavg!==null)?gavg*.20+uavg*.10:null;
+ const publicAverage=publicContribution===null?null:publicContribution/.30;
+ return {uavg,gavg,publicContribution,publicAverage,ucount:u.length,gcount:g.length,utotal:a.length,gtotal:b.length,submitted:votes.length};
 }
 function render(){
  byId('adminTitle').textContent=state.settings.title;
@@ -79,25 +82,24 @@ function renderJudges(){
 }
 function renderContestants(){
  byId('contestantTable').innerHTML=[...state.contestants].sort((a,b)=>a.display_order-b.display_order).map(c=>
-  `<tr><td>${c.display_order}</td><td><strong>${escapeHtml(c.name)}</strong></td><td>${laneName(c.lane)}${c.employment_type?' / '+typeName(c.employment_type):''}</td><td><input class="tiny-score" type="number" step=".5" min="0" max="100" value="${c.professional_score??''}" placeholder="待录入" data-prof-id="${c.id}"><button type="button" class="btn outline small" data-save-prof="${c.id}">保存</button></td><td><span class="status ${c.visible?'yes':'no'}">${c.visible?'显示':'隐藏'}</span></td><td class="nowrap"><button class="btn outline small" data-toggle-c="${c.id}">${c.visible?'隐藏':'显示'}</button><button class="danger-link" data-delete-c="${c.id}">删除</button></td></tr>`
- ).join('')||'<tr><td colspan="6">暂无选手</td></tr>';
- byId('contestantTable').querySelectorAll('[data-save-prof]').forEach(el=>el.onclick=()=>saveProfessional(el.dataset.saveProf));
+  `<tr><td>${c.display_order}</td><td><strong>${escapeHtml(c.name)}</strong></td><td>${laneName(c.lane)}${c.employment_type?' / '+typeName(c.employment_type):''}</td><td><span class="status ${c.visible?'yes':'no'}">${c.visible?'显示':'隐藏'}</span></td><td class="nowrap"><button class="btn outline small" data-toggle-c="${c.id}">${c.visible?'隐藏':'显示'}</button><button class="danger-link" data-delete-c="${c.id}">删除</button></td></tr>`
+ ).join('')||'<tr><td colspan="5">暂无选手</td></tr>';
  byId('contestantTable').querySelectorAll('[data-toggle-c]').forEach(el=>el.onclick=()=>toggleContestant(el.dataset.toggleC));
  byId('contestantTable').querySelectorAll('[data-delete-c]').forEach(el=>el.onclick=()=>deleteContestant(el.dataset.deleteC));
 }
 function ranked(){
  const rows=state.contestants.map(c=>({c,...stats(c)}));
- // 不同赛道独立排名，缺失专业分/任一评委组均分时不得视为0分。
- return rows.sort((a,b)=>a.c.lane.localeCompare(b.c.lane)||(b.final??-1)-(a.final??-1)||a.c.display_order-b.c.display_order);
+ // 不同赛道独立排名；任一大众评委组没有有效评分时显示「—」，不把缺项视作0分。
+ return rows.sort((a,b)=>a.c.lane.localeCompare(b.c.lane)||(b.publicAverage??-1)-(a.publicAverage??-1)||a.c.display_order-b.c.display_order);
 }
 function renderResults(){
  const lane=byId('resultLane').value;const all=ranked().filter(r=>lane==='all'||r.c.lane===lane);
  let previousLane='',rank=0;
  byId('resultTable').innerHTML=all.map(r=>{
   if(r.c.lane!==previousLane){previousLane=r.c.lane;rank=0;}
-  if(r.final!=null)rank++;
+  if(r.publicAverage!=null)rank++;
   const ratio=`本科 ${r.ucount}/${r.utotal} · 研究 ${r.gcount}/${r.gtotal}`;
-  return `<tr><td class="rank">${r.final==null?'—':rank}</td><td><strong>${escapeHtml(r.c.name)}</strong><div class="small-note">${laneName(r.c.lane)}</div></td><td>${fmt(r.c.professional_score)}</td><td>${fmt(r.gavg)}</td><td>${fmt(r.uavg)}</td><td class="positive">${fmt(r.final)}</td><td class="nowrap">${ratio}</td><td><button class="btn outline small" data-detail="${r.c.id}">查看</button></td></tr>`;
+  return `<tr><td class="rank">${r.publicAverage==null?'—':rank}</td><td><strong>${escapeHtml(r.c.name)}</strong><div class="small-note">${laneName(r.c.lane)}</div></td><td>${fmt(r.gavg)}</td><td>${fmt(r.uavg)}</td><td class="positive">${fmt(r.publicContribution)}</td><td class="positive">${fmt(r.publicAverage)}</td><td class="nowrap">${ratio}</td><td><button class="btn outline small" data-detail="${r.c.id}">查看</button></td></tr>`;
  }).join('')||'<tr><td colspan="8">暂无成绩</td></tr>';
  byId('resultTable').querySelectorAll('[data-detail]').forEach(el=>el.onclick=()=>showDetails(el.dataset.detail));
 }
@@ -112,9 +114,6 @@ function showDetails(id){
 }
 function renderSettings(){
  const s=state.settings;byId('settingTitle').value=s.title;
- byId('weightProfessional').value=Number(s.weight_professional)*100;
- byId('weightGraduate').value=Number(s.weight_graduate)*100;
- byId('weightUndergraduate').value=Number(s.weight_undergraduate)*100;
  byId('votingOpen').checked=s.voting_open;
 }
 async function mutate(promise,success='操作成功'){
@@ -145,10 +144,6 @@ async function addContestant(e){
  if(!item.name)return;
  await mutate(get('cv_contestants').insert(item),'选手已添加');byId('addContestantForm').reset();byId('employmentTypeWrap').hidden=true;
 }
-async function saveProfessional(id){const el=byId('contestantTable').querySelector(`[data-prof-id="${id}"]`);const v=el.value.trim();
- if(v!==''&&(!Number.isFinite(Number(v))||Number(v)<0||Number(v)>100)){toast('专业分应为 0 至 100',true);return;}
- await mutate(get('cv_contestants').update({professional_score:v===''?null:Number(v)}).eq('id',id),'专业分已保存');
-}
 async function toggleContestant(id){const c=state.contestants.find(x=>x.id===id);if(!c)return;
  if(!confirm(`确定${c.visible?'隐藏':'显示'}选手 ${c.name}？`))return;
  await mutate(get('cv_contestants').update({visible:!c.visible}).eq('id',id));
@@ -163,9 +158,9 @@ async function deleteScore(id,contestantId){const s=state.scores.find(x=>x.id===
  await mutate(get('cv_scores').delete().eq('id',id),'该次评分已撤销');showDetails(contestantId);
 }
 async function saveSettings(e){
- e.preventDefault();const pw=Number(byId('weightProfessional').value)/100,gw=Number(byId('weightGraduate').value)/100,uw=Number(byId('weightUndergraduate').value)/100;
- if([pw,gw,uw].some(x=>!Number.isFinite(x)||x<0||x>1)||Math.abs(pw+gw+uw-1)>1e-8){toast('三类评委权重之和必须恰好为 100%',true);return;}
- const next={title:byId('settingTitle').value.trim(),voting_open:byId('votingOpen').checked,weight_professional:pw,weight_graduate:gw,weight_undergraduate:uw,updated_at:new Date().toISOString()};
+ e.preventDefault();
+ const next={title:byId('settingTitle').value.trim(),voting_open:byId('votingOpen').checked,updated_at:new Date().toISOString()};
+ if(!next.title){toast('赛事名称不能为空',true);return;}
  if(next.voting_open&&!state.settings.voting_open&&!confirm('确定开放大众评分？请先确认名单与选手正确。'))return;
  await mutate(get('cv_settings').update(next).eq('id',1),'赛事设置已保存');
 }
@@ -217,8 +212,8 @@ async function importContestants(){
  }catch(e){toast(friendly(e),true)}
 }
 function exportResults(){
- const headers=['赛道','姓名','就业类别','专业评委得分','研究生评委均分','研究生评分人数','本科生评委均分','本科生评分人数','加权总分','成绩是否完整'];
- const data=ranked().map(r=>[laneName(r.c.lane),r.c.name,typeName(r.c.employment_type),r.c.professional_score,r.gavg,r.gcount,r.uavg,r.ucount,r.final,r.final==null?'待补齐':'完整']);
+ const headers=['赛道','姓名','就业类别','研究生评委均分','研究生评分人数','本科生评委均分','本科生评分人数','大众加权分（满分30）','大众综合分（百分制）','成绩是否完整'];
+ const data=ranked().map(r=>[laneName(r.c.lane),r.c.name,typeName(r.c.employment_type),r.gavg,r.gcount,r.uavg,r.ucount,r.publicContribution,r.publicAverage,r.publicAverage==null?'待补齐':'完整']);
  downloadCSV('大赛成绩汇总.csv',[headers,...data]);
 }
 function exportDetails(){
