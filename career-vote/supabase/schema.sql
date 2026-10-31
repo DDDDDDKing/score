@@ -12,11 +12,7 @@ create table if not exists public.cv_settings (
   id integer primary key default 1 check (id=1),
   title text not null default '中南大学第十二届大学生职业规划大赛 · 初赛',
   voting_open boolean not null default false,
-  weight_professional numeric(4,3) not null default .700 check(weight_professional between 0 and 1),
-  weight_graduate numeric(4,3) not null default .200 check(weight_graduate between 0 and 1),
-  weight_undergraduate numeric(4,3) not null default .100 check(weight_undergraduate between 0 and 1),
-  updated_at timestamptz not null default now(),
-  constraint cv_weights_sum check (weight_professional+weight_graduate+weight_undergraduate = 1)
+  updated_at timestamptz not null default now()
 );
 insert into public.cv_settings (id) values (1) on conflict (id) do nothing;
 
@@ -39,7 +35,6 @@ create table if not exists public.cv_contestants (
   employment_type text check(employment_type is null or employment_type in ('product','production','marketing','general','public')),
   display_order integer not null default 0,
   visible boolean not null default true,
-  professional_score numeric(5,2) check(professional_score between 0 and 100),
   created_at timestamptz not null default now(),
   constraint cv_employment_type_required check ((lane='growth' and employment_type is null) or (lane='employment' and employment_type is not null))
 );
