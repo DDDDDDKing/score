@@ -1,0 +1,255 @@
+import {db,configured,byId,escapeHtml,fmt,groupName,laneName,typeName,friendly,toast,downloadCSV} from './shared.js';
+let state={judges:[],contestants:[],scores:[],settings:null}, busy=false, activeTab='overview';
+const get=(table)=>db.from(table);
+async function fetchAll(table){
+ const all=[];let from=0;while(true){
+  const {data,error}=await get(table).select('*').range(from,from+999);
+  if(error)throw error;all.push(...data);if(data.length<1000)break;from+=1000;
+  if(from>100000)throw Error('记录数量超出单次导出上限');
+ }return all;
+}
+async function assertAdmin(){
+ const {data:{user},error}=await db.auth.getUser();if(error||!user)return false;
+ const {data,error:permissionError}=await get('cv_admins').select('user_id').eq('user_id',user.id).maybeSingle();
+ if(permissionError)throw permissionError;return Boolean(data);
+}
+async function setLoggedIn(){
+ if(!(await assertAdmin())){
+  await db.auth.signOut();throw Error('此账号尚未加入管理权限白名单 cv_admins');
+ }
+ byId('authPanel').hidden=true;byId('adminPanel').hidden=false;
+ await reload();
+}
+async function login(event){
+ event.preventDefault();if(!configured)return;const btn=byId('loginBtn');btn.disabled=true;
+ try{
+  const {error}=await db.auth.signInWithPassword({email:byId('email').value.trim(),password:byId('password').value});
+  if(error)throw error;await setLoggedIn();toast('管理员登录成功');
+ }catch(e){toast(friendly(e),true)}finally{btn.disabled=false}
+}
+async function reload(silent=false){
+ if(busy||!configured||byId('adminPanel').hidden)return;
+ busy=true;
+ try{
+  const [settings,judges,contestants,scores]=await Promise.all([
+    get('cv_settings').select('*').eq('id',1).single(),fetchAll('cv_judges'),fetchAll('cv_contestants'),fetchAll('cv_scores')
+  ]);
+  if(settings.error)throw settings.error;
+  state={settings:settings.data,judges,contestants,scores};render();
+  byId('lastSync').textContent='上次更新：'+new Date().toLocaleTimeString('zh-CN');
+  if(!silent)toast('最新数据已同步');
+ }catch(err){toast(friendly(err),true)}finally{busy=false}
+}
+function votesFor(id){return state.scores.filter(s=>s.contestant_id===id && state.judges.some(j=>j.id===s.judge_id&&j.is_active));}
+function stats(c){
+ const votes=votesFor(c.id);const a=state.judges.filter(j=>j.judge_group==='undergraduate'&&j.is_active);
+ const b=state.judges.filter(j=>j.judge_group==='graduate'&&j.is_active);
+ const u=votes.filter(s=>a.some(j=>j.id===s.judge_id));const g=votes.filter(s=>b.some(j=>j.id===s.judge_id));
+ const avg=ss=>ss.length?ss.reduce((x,s)=>x+Number(s.total),0)/ss.length:null;
+ const uavg=avg(u),gavg=avg(g),p=c.professional_score==null?null:Number(c.professional_score);
+ const w=state.settings;const final=(p!=null&&gavg!=null&&uavg!=null)?p*Number(w.weight_professional)+gavg*Number(w.weight_graduate)+uavg*Number(w.weight_undergraduate):null;
+ return {uavg,gavg,final,ucount:u.length,gcount:g.length,utotal:a.length,gtotal:b.length,submitted:votes.length};
+}
+function render(){
+ byId('adminTitle').textContent=state.settings.title;
+ renderOverview();renderJudges();renderContestants();renderResults();renderSettings();
+}
+function renderOverview(){
+ const js=state.judges,active=js.filter(j=>j.is_active),acted=active.filter(j=>j.activated_at);
+ const s=state.scores.filter(sc=>active.some(j=>j.id===sc.judge_id));
+ const items=[['登记评委',js.length,`本科 ${js.filter(j=>j.judge_group==='undergraduate').length} · 研究生 ${js.filter(j=>j.judge_group==='graduate').length}`],
+  ['已激活评委',acted.length,`${active.length?Math.round(acted.length/active.length*100):0}% 已激活`],
+  ['参赛选手',state.contestants.length,`成长 ${state.contestants.filter(c=>c.lane==='growth').length} · 就业 ${state.contestants.filter(c=>c.lane==='employment').length}`],
+  ['完成评分次数',s.length,`理论满额 ${active.length*state.contestants.filter(c=>c.visible).length} 次`]];
+ byId('statsGrid').innerHTML=items.map(([n,v,h])=>`<div class="stat"><label>${n}</label><div class="kpi">${v}</div><div class="hint">${h}</div></div>`).join('');
+ const total=active.length*state.contestants.filter(c=>c.visible).length,pct=total?Math.min(100,s.length/total*100):0;
+ byId('overallProgress').innerHTML=`<div class="progress-line">${s.length} / ${total} 份已提交 <small>${pct.toFixed(1)}% 完成</small></div><div class="progress-track"><div style="width:${pct}%"></div></div><p class="small-note">仅统计当前有效评委与可见选手的评分；每位评委对每位选手最多提交一次。</p>`;
+}
+function renderJudges(){
+ const filter=byId('judgeFilter').value,query=byId('judgeSearch').value.trim().toLowerCase();
+ const relevant=state.judges.filter(j=>(filter==='all'||j.judge_group===filter)&&(!query||(j.name+' '+j.student_id).toLowerCase().includes(query)));
+ byId('judgeSummary').textContent=`本科生 ${state.judges.filter(j=>j.judge_group==='undergraduate').length} 人 · 研究生 ${state.judges.filter(j=>j.judge_group==='graduate').length} 人 · 共 ${state.judges.length} 人`;
+ byId('judgeTable').innerHTML=relevant.map(j=>{
+  const count=state.scores.filter(s=>s.judge_id===j.id).length;
+  return `<tr><td><strong>${escapeHtml(j.name)}</strong></td><td class="nowrap">${escapeHtml(j.student_id)}</td><td>${groupName(j.judge_group)}</td><td><span class="status ${j.activated_at?'yes':'no'}">${j.activated_at?'已激活':'未激活'}</span></td><td>${count}</td><td><span class="status ${j.is_active?'yes':'no'}">${j.is_active?'启用':'停用'}</span></td><td class="nowrap"><button class="btn outline small" data-toggle-judge="${j.id}">${j.is_active?'停用':'启用'}</button>${j.activated_at?`<button class="btn outline small" data-reset-judge="${j.id}">重置激活</button>`:`<button class="btn outline small" data-remove-judge="${j.id}">删除</button>`}</td></tr>`;
+ }).join('') || '<tr><td colspan="7">暂无记录</td></tr>';
+ byId('judgeTable').querySelectorAll('[data-toggle-judge]').forEach(el=>el.onclick=()=>toggleJudge(el.dataset.toggleJudge));
+ byId('judgeTable').querySelectorAll('[data-reset-judge]').forEach(el=>el.onclick=()=>resetJudge(el.dataset.resetJudge));
+ byId('judgeTable').querySelectorAll('[data-remove-judge]').forEach(el=>el.onclick=()=>removeJudge(el.dataset.removeJudge));
+}
+function renderContestants(){
+ byId('contestantTable').innerHTML=[...state.contestants].sort((a,b)=>a.display_order-b.display_order).map(c=>
+  `<tr><td>${c.display_order}</td><td><strong>${escapeHtml(c.name)}</strong></td><td>${laneName(c.lane)}${c.employment_type?' / '+typeName(c.employment_type):''}</td><td><input class="tiny-score" type="number" step=".5" min="0" max="100" value="${c.professional_score??''}" placeholder="待录入" data-prof-id="${c.id}"><button type="button" class="btn outline small" data-save-prof="${c.id}">保存</button></td><td><span class="status ${c.visible?'yes':'no'}">${c.visible?'显示':'隐藏'}</span></td><td class="nowrap"><button class="btn outline small" data-toggle-c="${c.id}">${c.visible?'隐藏':'显示'}</button><button class="danger-link" data-delete-c="${c.id}">删除</button></td></tr>`
+ ).join('')||'<tr><td colspan="6">暂无选手</td></tr>';
+ byId('contestantTable').querySelectorAll('[data-save-prof]').forEach(el=>el.onclick=()=>saveProfessional(el.dataset.saveProf));
+ byId('contestantTable').querySelectorAll('[data-toggle-c]').forEach(el=>el.onclick=()=>toggleContestant(el.dataset.toggleC));
+ byId('contestantTable').querySelectorAll('[data-delete-c]').forEach(el=>el.onclick=()=>deleteContestant(el.dataset.deleteC));
+}
+function ranked(){
+ const rows=state.contestants.map(c=>({c,...stats(c)}));
+ // 不同赛道独立排名，缺失专业分/任一评委组均分时不得视为0分。
+ return rows.sort((a,b)=>a.c.lane.localeCompare(b.c.lane)||(b.final??-1)-(a.final??-1)||a.c.display_order-b.c.display_order);
+}
+function renderResults(){
+ const lane=byId('resultLane').value;const all=ranked().filter(r=>lane==='all'||r.c.lane===lane);
+ let previousLane='',rank=0;
+ byId('resultTable').innerHTML=all.map(r=>{
+  if(r.c.lane!==previousLane){previousLane=r.c.lane;rank=0;}
+  if(r.final!=null)rank++;
+  const ratio=`本科 ${r.ucount}/${r.utotal} · 研究 ${r.gcount}/${r.gtotal}`;
+  return `<tr><td class="rank">${r.final==null?'—':rank}</td><td><strong>${escapeHtml(r.c.name)}</strong><div class="small-note">${laneName(r.c.lane)}</div></td><td>${fmt(r.c.professional_score)}</td><td>${fmt(r.gavg)}</td><td>${fmt(r.uavg)}</td><td class="positive">${fmt(r.final)}</td><td class="nowrap">${ratio}</td><td><button class="btn outline small" data-detail="${r.c.id}">查看</button></td></tr>`;
+ }).join('')||'<tr><td colspan="8">暂无成绩</td></tr>';
+ byId('resultTable').querySelectorAll('[data-detail]').forEach(el=>el.onclick=()=>showDetails(el.dataset.detail));
+}
+function showDetails(id){
+ const candidate=state.contestants.find(c=>c.id===id);if(!candidate)return;
+ byId('resultDetails').hidden=false;byId('detailTitle').textContent=candidate.name+' · 评分明细';
+ byId('detailTable').innerHTML=state.scores.filter(s=>s.contestant_id===id).map(s=>{
+  const j=state.judges.find(x=>x.id===s.judge_id);return `<tr><td>${escapeHtml(j?.name||'已删除')}</td><td>${escapeHtml(j?.student_id||'')}</td><td>${groupName(j?.judge_group||'')}</td><td>${fmt(s.total)}</td><td>${new Date(s.created_at).toLocaleString('zh-CN')}</td><td><button class="danger-link" data-delete-score="${s.id}">撤销该次评分</button></td></tr>`;
+ }).join('')||'<tr><td colspan="6">暂无评分</td></tr>';
+ byId('detailTable').querySelectorAll('[data-delete-score]').forEach(el=>el.onclick=()=>deleteScore(el.dataset.deleteScore,id));
+ byId('resultDetails').scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+function renderSettings(){
+ const s=state.settings;byId('settingTitle').value=s.title;
+ byId('weightProfessional').value=Number(s.weight_professional)*100;
+ byId('weightGraduate').value=Number(s.weight_graduate)*100;
+ byId('weightUndergraduate').value=Number(s.weight_undergraduate)*100;
+ byId('votingOpen').checked=s.voting_open;
+}
+async function mutate(promise,success='操作成功'){
+ try{const {error}=await promise;if(error)throw error;await reload(true);toast(success);}catch(e){toast(friendly(e),true)}
+}
+async function addJudge(e){
+ e.preventDefault();const name=byId('addJudgeName').value.trim(),student_id=byId('addJudgeId').value.trim(),judge_group=byId('addJudgeGroup').value;
+ if(!name||!student_id)return;
+ await mutate(get('cv_judges').insert({name,student_id,judge_group}),'评委已添加');
+ byId('addJudgeForm').reset();
+}
+async function toggleJudge(id){const j=state.judges.find(x=>x.id===id);if(!j)return;
+ if(!confirm(`确定${j.is_active?'停用':'启用'} ${j.name}？${j.is_active?'停用后此评委评分暂不参与统计。':''}`))return;
+ await mutate(get('cv_judges').update({is_active:!j.is_active}).eq('id',id),'评委状态已更新');
+}
+async function resetJudge(id){const j=state.judges.find(x=>x.id===id);
+ if(!j||!confirm(`确定重置 ${j.name} 的设备激活？\n原浏览器将失效；历史打分仍保留，已评分的选手不能再评分。`))return;
+ await mutate(get('cv_judges').update({activated_at:null,token_hash:null}).eq('id',id),'已解除绑定，允许重新激活');
+}
+async function removeJudge(id){const j=state.judges.find(x=>x.id===id);
+ if(!j||j.activated_at||state.scores.some(s=>s.judge_id===id)){toast('已激活或已有评分的评委不能直接删除，请先停用',true);return;}
+ if(!confirm(`确定删除未激活评委 ${j.name}？`))return;
+ await mutate(get('cv_judges').delete().eq('id',id),'评委已删除');
+}
+async function addContestant(e){
+ e.preventDefault();const lane=byId('contestantLane').value;
+ const item={name:byId('contestantName').value.trim(),lane,employment_type:lane==='employment'?byId('employmentType').value:null,display_order:Number(byId('displayOrder').value)||0};
+ if(!item.name)return;
+ await mutate(get('cv_contestants').insert(item),'选手已添加');byId('addContestantForm').reset();byId('employmentTypeWrap').hidden=true;
+}
+async function saveProfessional(id){const el=byId('contestantTable').querySelector(`[data-prof-id="${id}"]`);const v=el.value.trim();
+ if(v!==''&&(!Number.isFinite(Number(v))||Number(v)<0||Number(v)>100)){toast('专业分应为 0 至 100',true);return;}
+ await mutate(get('cv_contestants').update({professional_score:v===''?null:Number(v)}).eq('id',id),'专业分已保存');
+}
+async function toggleContestant(id){const c=state.contestants.find(x=>x.id===id);if(!c)return;
+ if(!confirm(`确定${c.visible?'隐藏':'显示'}选手 ${c.name}？`))return;
+ await mutate(get('cv_contestants').update({visible:!c.visible}).eq('id',id));
+}
+async function deleteContestant(id){const c=state.contestants.find(x=>x.id===id);if(!c)return;
+ if(state.scores.some(s=>s.contestant_id===id)){toast('已有评分记录的选手不能删除，建议将其隐藏',true);return;}
+ if(!confirm(`确定删除未评分选手 ${c.name}？`))return;
+ await mutate(get('cv_contestants').delete().eq('id',id),'选手已删除');
+}
+async function deleteScore(id,contestantId){const s=state.scores.find(x=>x.id===id);if(!s)return;
+ if(!confirm(`确认撤销 ${fmt(s.total)} 分这条评分？\n评委可对此选手重新提交一次分数。操作不可撤销。`))return;
+ await mutate(get('cv_scores').delete().eq('id',id),'该次评分已撤销');showDetails(contestantId);
+}
+async function saveSettings(e){
+ e.preventDefault();const pw=Number(byId('weightProfessional').value)/100,gw=Number(byId('weightGraduate').value)/100,uw=Number(byId('weightUndergraduate').value)/100;
+ if([pw,gw,uw].some(x=>!Number.isFinite(x)||x<0||x>1)||Math.abs(pw+gw+uw-1)>1e-8){toast('三类评委权重之和必须恰好为 100%',true);return;}
+ const next={title:byId('settingTitle').value.trim(),voting_open:byId('votingOpen').checked,weight_professional:pw,weight_graduate:gw,weight_undergraduate:uw,updated_at:new Date().toISOString()};
+ if(next.voting_open&&!state.settings.voting_open&&!confirm('确定开放大众评分？请先确认名单与选手正确。'))return;
+ await mutate(get('cv_settings').update(next).eq('id',1),'赛事设置已保存');
+}
+async function readSheet(file,sheetName){
+ if(!file)throw Error('请先选择 Excel 文件');
+ const name=file.name.toLowerCase();
+ if(name.endsWith('.csv')){
+  if(!window.XLSX)throw Error('Excel 解析组件未加载，请检查网络');
+  const contents=await file.arrayBuffer(),book=window.XLSX.read(contents,{type:'array'});
+  return window.XLSX.utils.sheet_to_json(book.Sheets[book.SheetNames[0]],{defval:'',raw:false});
+ }
+ if(!window.XLSX)throw Error('Excel 解析组件未加载，请检查网络');
+ const book=window.XLSX.read(await file.arrayBuffer(),{type:'array',cellText:true});
+ const sheet=book.Sheets[sheetName];if(!sheet)throw Error(`Excel 中没有「${sheetName}」工作表，请使用提供的模板`);
+ return window.XLSX.utils.sheet_to_json(sheet,{defval:'',raw:false});
+}
+async function importJudges(){
+ const group=byId('importGroup').value,file=byId('judgesExcel').files[0],label=groupName(group);
+ try{
+  const items=(await readSheet(file,label)).map(x=>({name:String(x['姓名']??'').trim(),student_id:String(x['学号']??'').trim(),judge_group:group})).filter(x=>x.name||x.student_id);
+  if(!items.length)throw Error(`${label}工作表内没有数据`);
+  for(const j of items)if(!j.name||j.student_id.length<3)throw Error(`存在空姓名或无效学号：${j.name} / ${j.student_id}`);
+  const ids=items.map(j=>j.student_id);if(new Set(ids).size!==ids.length)throw Error('Excel 表内存在重复学号，请先检查');
+  const existing=new Map(state.judges.map(j=>[j.student_id,j]));const duplicates=items.filter(j=>existing.has(j.student_id));
+  const conflicts=duplicates.filter(j=>{const old=existing.get(j.student_id);return old.judge_group!==group||old.name!==j.name;});
+  if(conflicts.length)throw Error(`已有 ${conflicts.length} 条同学号但姓名/组别不同，请先人工核查：${conflicts.slice(0,4).map(j=>j.student_id).join('、')}`);
+  const fresh=items.filter(j=>!existing.has(j.student_id));
+  if(!confirm(`${label}：表格 ${items.length} 人，其中已存在 ${duplicates.length} 人，新增 ${fresh.length} 人。\n确认批量导入？`))return;
+  for(let i=0;i<fresh.length;i+=200){const {error}=await get('cv_judges').insert(fresh.slice(i,i+200));if(error)throw error;}
+  await reload(true);byId('judgeImportInfo').textContent=`本次新导入 ${fresh.length} 人；跳过已存在 ${duplicates.length} 人`;
+  toast(`导入成功：新增 ${fresh.length} 名 ${label}`);
+ }catch(e){toast(friendly(e),true)}
+}
+async function importContestants(){
+ try{
+  const items=(await readSheet(byId('contestantsExcel').files[0],'参赛选手')).filter(x=>x['姓名']).map(x=>{
+   const lane=String(x['赛道']??'').trim()==='成长赛道'?'growth':String(x['赛道']??'').trim()==='就业赛道'?'employment':null;
+   const mapping={'产品研发':'product','生产服务':'production','市场营销':'marketing','通用职能':'general','公共服务':'public'};
+   const et=lane==='employment'?mapping[String(x['就业类别']??'').trim()]:null;
+   if(!lane||(lane==='employment'&&!et))throw Error('参赛选手表包含无效赛道/就业类别');
+   return {name:String(x['姓名']).trim(),lane,employment_type:et,display_order:Number(x['展示顺序'])||0};
+  });
+  if(!items.length)throw Error('参赛选手工作表为空');
+  const existing=new Set(state.contestants.map(c=>`${c.lane}|${c.name}`));
+  const seen=new Set();for(const c of items){const k=`${c.lane}|${c.name}`;if(existing.has(k)||seen.has(k))throw Error(`选手重名或已存在：${c.name}（${laneName(c.lane)}）`);seen.add(k);}
+  if(!confirm(`确定新增 ${items.length} 名参赛选手？`))return;
+  for(let i=0;i<items.length;i+=100){const {error}=await get('cv_contestants').insert(items.slice(i,i+100));if(error)throw error;}
+  await reload(true);toast(`成功导入 ${items.length} 名选手`);
+ }catch(e){toast(friendly(e),true)}
+}
+function exportResults(){
+ const headers=['赛道','姓名','就业类别','专业评委得分','研究生评委均分','研究生评分人数','本科生评委均分','本科生评分人数','加权总分','成绩是否完整'];
+ const data=ranked().map(r=>[laneName(r.c.lane),r.c.name,typeName(r.c.employment_type),r.c.professional_score,r.gavg,r.gcount,r.uavg,r.ucount,r.final,r.final==null?'待补齐':'完整']);
+ downloadCSV('大赛成绩汇总.csv',[headers,...data]);
+}
+function exportDetails(){
+ const rows=state.scores.map(s=>{const c=state.contestants.find(x=>x.id===s.contestant_id),j=state.judges.find(x=>x.id===s.judge_id);
+ return [laneName(c?.lane),c?.name||'',groupName(j?.judge_group),j?.name||'',j?.student_id||'',s.total,JSON.stringify(s.breakdown),s.created_at,j?.is_active?'有效':'已停用'];
+ });
+ downloadCSV('大赛评分明细.csv',[['赛道','参赛选手','评委组','评委姓名','学号','总分','分项评分','提交时间','评委状态'],...rows]);
+}
+function showTab(tab){activeTab=tab;
+ document.querySelectorAll('.admin-tabs button').forEach(el=>el.classList.toggle('selected',el.dataset.tab===tab));
+ document.querySelectorAll('.tab-section').forEach(el=>el.hidden=el.id!==`tab-${tab}`);
+}
+async function init(){
+ if(!configured){byId('configWarning').hidden=false;byId('loginBtn').disabled=true;return;}
+ try{const {data:{session}}=await db.auth.getSession();if(session)await setLoggedIn();}catch(err){toast(friendly(err),true)}
+}
+byId('authForm').addEventListener('submit',login);
+byId('refreshBtn').addEventListener('click',()=>reload());
+byId('signOutBtn').addEventListener('click',async()=>{await db.auth.signOut();byId('adminPanel').hidden=true;byId('authPanel').hidden=false;toast('已安全退出')});
+document.querySelectorAll('.admin-tabs button').forEach(el=>el.addEventListener('click',()=>showTab(el.dataset.tab)));
+byId('addJudgeForm').addEventListener('submit',addJudge);
+byId('judgeSearch').addEventListener('input',renderJudges);
+byId('judgeFilter').addEventListener('change',renderJudges);
+byId('importJudgeBtn').addEventListener('click',importJudges);
+byId('addContestantForm').addEventListener('submit',addContestant);
+byId('contestantLane').addEventListener('change',()=>byId('employmentTypeWrap').hidden=byId('contestantLane').value!=='employment');
+byId('importContestantBtn').addEventListener('click',importContestants);
+byId('resultLane').addEventListener('change',renderResults);
+byId('hideDetails').addEventListener('click',()=>byId('resultDetails').hidden=true);
+byId('exportResults').addEventListener('click',exportResults);
+byId('exportDetails').addEventListener('click',exportDetails);
+byId('settingsForm').addEventListener('submit',saveSettings);
+setInterval(()=>{if(!byId('adminPanel').hidden&&document.visibilityState==='visible'&&activeTab!=='settings'&&activeTab!=='contestants')reload(true)},15000);
+init();
