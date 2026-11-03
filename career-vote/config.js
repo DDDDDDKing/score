@@ -1,4 +1,3 @@
-// 在部署前填入专用 Supabase 项目的 Project URL 与 publishable key。
-// Publishable key 可公开；严禁填写 service_role / secret key。
-export const SUPABASE_URL = '';
-export const SUPABASE_PUBLISHABLE_KEY = '';
+// Public client configuration. Never add server credentials here.
+export const SUPABASE_URL = 'https://rkowumtpicxtsrnotoqc.supabase.co';
+export const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_ELFjHy5tz_3c9amtSYM7tg_bvJc-4AO';

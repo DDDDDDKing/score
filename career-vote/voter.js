@@ -22,7 +22,7 @@ function renderList(){
  if(!filtered.length){el.innerHTML='<div class="panel empty">本赛道暂未添加参赛选手</div>';return;}
  el.innerHTML=filtered.map((c,i)=>{
   const done=submitted.get(c.id);
-  return `<article class="candidate-card"><div class="candidate-no">${String(i+1).padStart(2,'0')}</div><div class="candidate-main"><h3>${escapeHtml(c.name)}</h3><p>${laneName(c.lane)}${c.employment_type?' · '+typeName(c.employment_type):''}</p></div><div class="candidate-actions">${done?`<span class="done-tag">✓ 已评分 ${fmt(done.total)}</span>`:`<button class="btn small outline" data-score="${c.id}" ${!open?'disabled':''}>开始评分</button>`}</div></article>`;
+  return `<article class="candidate-card"><div class="candidate-no">${String(c.display_order).padStart(2,'0')}</div><div class="candidate-main"><h3>${escapeHtml(c.name)}</h3><p>${laneName(c.lane)}${c.employment_type?' · '+typeName(c.employment_type):''}</p></div><div class="candidate-actions">${done?`<span class="done-tag">✓ 已评分 ${fmt(done.total)}</span>`:`<button class="btn small outline" data-score="${c.id}" ${!open?'disabled':''}>开始评分</button>`}</div></article>`;
  }).join('');
  el.querySelectorAll('[data-score]').forEach(button=>button.addEventListener('click',()=>openDialog(button.dataset.score)));
 }
@@ -41,21 +41,21 @@ function calcTotal(){
 }
 async function activate(e){
  e.preventDefault();if(!configured) return;
- const name=byId('judgeName').value.trim(), id=byId('studentId').value.trim();
- if(!name||!id) return;
- const btn=byId('claimBtn');btn.disabled=true;btn.textContent='正在安全激活…';
+ const name=byId('judgeName').value.trim(), id=byId('studentId').value.trim(), phone=byId('judgePhone').value.trim();
+ if(!name||!id||!phone) return;
+ const btn=byId('claimBtn');btn.disabled=true;btn.textContent='正在核验身份…';
  try{
-  const rows=await rpc('cv_claim_judge',{p_name:name,p_student_id:id});
-  if(!rows?.length) throw Error('激活失败，请联系管理员');
+  const rows=await rpc('cv_claim_judge',{p_name:name,p_student_id:id,p_phone:phone});
+  if(!rows?.length) throw Error('登录失败，请联系管理员');
   token=rows[0].session_token;localStorage.setItem(TOKEN_KEY,token);
-  await enter();toast('激活成功！此身份已绑定当前浏览器');
- }catch(err){toast(friendly(err),true)}finally{btn.disabled=false;btn.innerHTML='验证身份并激活 <span>→</span>'}
+  await enter();toast('登录成功，已恢复云端评分进度');
+ }catch(err){toast(friendly(err),true)}finally{btn.disabled=false;btn.innerHTML='验证身份并登录 <span>→</span>'}
 }
 async function enter(){
  const who=await rpc('cv_whoami',{p_token:token});
  if(!who?.length){
    // 不自动删除旧设备标记：误清理浏览器存储会导致身份丢失，需管理员处理。
-   switchPanel(false);throw Error('此浏览器的评委凭证已失效。请联系管理员重新激活');
+   switchPanel(false);throw Error('此浏览器的评委凭证已失效。请重新输入姓名、学号和电话号码登录');
  }
  byId('greeting').textContent=who[0].judge_name;
  byId('groupTag').textContent=groupName(who[0].judge_group);
@@ -85,3 +85,4 @@ byId('closeScore').addEventListener('click',()=>byId('scoreDialog').close());
 byId('rubricFields').addEventListener('input',calcTotal);
 document.querySelectorAll('.lane-tab').forEach(el=>el.addEventListener('click',()=>{activeLane=el.dataset.lane;renderList()}));
 init();
+setInterval(async()=>{if(document.visibilityState==='visible'&&configured&&!byId('scoreDialog').open){try{await syncEvent();if(token&&!byId('appPanel').hidden)await refreshSubmissions();}catch{}}},15000);

@@ -70,12 +70,12 @@ function renderOverview(){
 }
 function renderJudges(){
  const filter=byId('judgeFilter').value,query=byId('judgeSearch').value.trim().toLowerCase();
- const relevant=state.judges.filter(j=>(filter==='all'||j.judge_group===filter)&&(!query||(j.name+' '+j.student_id).toLowerCase().includes(query)));
+ const relevant=state.judges.filter(j=>(filter==='all'||j.judge_group===filter)&&(!query||(j.name+' '+j.student_id+' '+j.phone).toLowerCase().includes(query)));
  byId('judgeSummary').textContent=`本科生 ${state.judges.filter(j=>j.judge_group==='undergraduate').length} 人 · 研究生 ${state.judges.filter(j=>j.judge_group==='graduate').length} 人 · 共 ${state.judges.length} 人`;
  byId('judgeTable').innerHTML=relevant.map(j=>{
   const count=state.scores.filter(s=>s.judge_id===j.id).length;
-  return `<tr><td><strong>${escapeHtml(j.name)}</strong></td><td class="nowrap">${escapeHtml(j.student_id)}</td><td>${groupName(j.judge_group)}</td><td><span class="status ${j.activated_at?'yes':'no'}">${j.activated_at?'已激活':'未激活'}</span></td><td>${count}</td><td><span class="status ${j.is_active?'yes':'no'}">${j.is_active?'启用':'停用'}</span></td><td class="nowrap"><button class="btn outline small" data-toggle-judge="${j.id}">${j.is_active?'停用':'启用'}</button>${j.activated_at?`<button class="btn outline small" data-reset-judge="${j.id}">重置激活</button>`:`<button class="btn outline small" data-remove-judge="${j.id}">删除</button>`}</td></tr>`;
- }).join('') || '<tr><td colspan="7">暂无记录</td></tr>';
+  return `<tr><td><strong>${escapeHtml(j.name)}</strong></td><td class="nowrap">${escapeHtml(j.student_id)}</td><td>${escapeHtml(j.phone)}</td><td>${groupName(j.judge_group)}</td><td><span class="status ${j.activated_at?'yes':'no'}">${j.activated_at?'已激活':'未激活'}</span></td><td>${count}</td><td><span class="status ${j.is_active?'yes':'no'}">${j.is_active?'启用':'停用'}</span></td><td class="nowrap"><button class="btn outline small" data-toggle-judge="${j.id}">${j.is_active?'停用':'启用'}</button>${j.activated_at?`<button class="btn outline small" data-reset-judge="${j.id}">重置登录</button>`:`<button class="btn outline small" data-remove-judge="${j.id}">删除</button>`}</td></tr>`;
+ }).join('') || '<tr><td colspan="8">暂无记录</td></tr>';
  byId('judgeTable').querySelectorAll('[data-toggle-judge]').forEach(el=>el.onclick=()=>toggleJudge(el.dataset.toggleJudge));
  byId('judgeTable').querySelectorAll('[data-reset-judge]').forEach(el=>el.onclick=()=>resetJudge(el.dataset.resetJudge));
  byId('judgeTable').querySelectorAll('[data-remove-judge]').forEach(el=>el.onclick=()=>removeJudge(el.dataset.removeJudge));
@@ -120,9 +120,9 @@ async function mutate(promise,success='操作成功'){
  try{const {error}=await promise;if(error)throw error;await reload(true);toast(success);}catch(e){toast(friendly(e),true)}
 }
 async function addJudge(e){
- e.preventDefault();const name=byId('addJudgeName').value.trim(),student_id=byId('addJudgeId').value.trim(),judge_group=byId('addJudgeGroup').value;
- if(!name||!student_id)return;
- await mutate(get('cv_judges').insert({name,student_id,judge_group}),'评委已添加');
+ e.preventDefault();const name=byId('addJudgeName').value.trim(),student_id=byId('addJudgeId').value.trim(),phone=byId('addJudgePhone').value.trim(),judge_group=byId('addJudgeGroup').value;
+ if(!name||!student_id||!phone)return;
+ await mutate(get('cv_judges').insert({name,student_id,phone,judge_group}),'评委已添加');
  byId('addJudgeForm').reset();
 }
 async function toggleJudge(id){const j=state.judges.find(x=>x.id===id);if(!j)return;
@@ -130,8 +130,8 @@ async function toggleJudge(id){const j=state.judges.find(x=>x.id===id);if(!j)ret
  await mutate(get('cv_judges').update({is_active:!j.is_active}).eq('id',id),'评委状态已更新');
 }
 async function resetJudge(id){const j=state.judges.find(x=>x.id===id);
- if(!j||!confirm(`确定重置 ${j.name} 的设备激活？\n原浏览器将失效；历史打分仍保留，已评分的选手不能再评分。`))return;
- await mutate(get('cv_judges').update({activated_at:null,token_hash:null}).eq('id',id),'已解除绑定，允许重新激活');
+ if(!j||!confirm(`确定重置 ${j.name} 的登录凭证？\n所有已登录浏览器将失效；历史打分仍保留，已评分的选手不能再评分。`))return;
+ await mutate(get('cv_judges').update({activated_at:null,token_hash:null}).eq('id',id),'已解除绑定，允许重新登录');
 }
 async function removeJudge(id){const j=state.judges.find(x=>x.id===id);
  if(!j||j.activated_at||state.scores.some(s=>s.judge_id===id)){toast('已激活或已有评分的评委不能直接删除，请先停用',true);return;}
@@ -180,13 +180,13 @@ async function readSheet(file,sheetName){
 async function importJudges(){
  const group=byId('importGroup').value,file=byId('judgesExcel').files[0],label=groupName(group);
  try{
-  const items=(await readSheet(file,label)).map(x=>({name:String(x['姓名']??'').trim(),student_id:String(x['学号']??'').trim(),judge_group:group})).filter(x=>x.name||x.student_id);
+  const items=(await readSheet(file,label)).map(x=>({name:String(x['姓名']??'').trim(),student_id:String(x['学号']??'').trim(),phone:String(x['电话号码']??'').trim(),judge_group:group})).filter(x=>x.name||x.student_id);
   if(!items.length)throw Error(`${label}工作表内没有数据`);
-  for(const j of items)if(!j.name||j.student_id.length<3)throw Error(`存在空姓名或无效学号：${j.name} / ${j.student_id}`);
+  for(const j of items)if(!j.name||j.student_id.length<3||!/^\+?[0-9]{6,20}$/.test(j.phone))throw Error(`存在空姓名、无效学号或电话号码：${j.name} / ${j.student_id}`);
   const ids=items.map(j=>j.student_id);if(new Set(ids).size!==ids.length)throw Error('Excel 表内存在重复学号，请先检查');
   const existing=new Map(state.judges.map(j=>[j.student_id,j]));const duplicates=items.filter(j=>existing.has(j.student_id));
-  const conflicts=duplicates.filter(j=>{const old=existing.get(j.student_id);return old.judge_group!==group||old.name!==j.name;});
-  if(conflicts.length)throw Error(`已有 ${conflicts.length} 条同学号但姓名/组别不同，请先人工核查：${conflicts.slice(0,4).map(j=>j.student_id).join('、')}`);
+  const conflicts=duplicates.filter(j=>{const old=existing.get(j.student_id);return old.judge_group!==group||old.name!==j.name||old.phone!==j.phone;});
+  if(conflicts.length)throw Error(`已有 ${conflicts.length} 条同学号但姓名/电话/组别不同，请先人工核查：${conflicts.slice(0,4).map(j=>j.student_id).join('、')}`);
   const fresh=items.filter(j=>!existing.has(j.student_id));
   if(!confirm(`${label}：表格 ${items.length} 人，其中已存在 ${duplicates.length} 人，新增 ${fresh.length} 人。\n确认批量导入？`))return;
   for(let i=0;i<fresh.length;i+=200){const {error}=await get('cv_judges').insert(fresh.slice(i,i+200));if(error)throw error;}
