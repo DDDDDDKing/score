@@ -15,7 +15,7 @@ async function assertAdmin(){
 }
 async function setLoggedIn(){
  if(!(await assertAdmin())){
-  await db.auth.signOut();throw Error('此账号尚未加入管理权限白名单 cv_admins');
+  await db.auth.signOut();throw Error('管理权限尚未开通，请联系主办方');
  }
  byId('authPanel').hidden=true;byId('adminPanel').hidden=false;
  await reload();
@@ -23,7 +23,7 @@ async function setLoggedIn(){
 async function login(event){
  event.preventDefault();if(!configured)return;const btn=byId('loginBtn');btn.disabled=true;
  try{
-  const {error}=await db.auth.signInWithPassword({email:byId('email').value.trim(),password:byId('password').value});
+  const {error}=await db.auth.signInWithPassword({email:'event-admin@career-vote.invalid',password:byId('password').value});
   if(error)throw error;await setLoggedIn();toast('管理员登录成功');
  }catch(e){toast(friendly(e),true)}finally{btn.disabled=false}
 }
