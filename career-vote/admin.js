@@ -1,6 +1,9 @@
 import {db,configured,byId,escapeHtml,fmt,laneName,typeName,friendly,toast,downloadCSV} from './shared.js';
 let state={judges:[],contestants:[],scores:[],settings:null}, busy=false, activeTab='overview', detailId=null;
 const get=(table)=>db.from(table);
+const testContestantId='62bf246b-a421-4bb1-9c53-ed8383b0e7fb';
+const bulkButtons=document.querySelectorAll('[data-bulk-judges],[data-bulk-contestants]');
+let pendingReload;
 async function fetchAll(table){
  const all=[];let from=0;while(true){
   const {data,error}=await get(table).select('*').order('id').range(from,from+999);
@@ -28,8 +31,13 @@ async function login(event){
  }catch(e){toast(friendly(e),true)}finally{btn.disabled=false}
 }
 async function reload(silent=false){
- if(busy||!configured||byId('adminPanel').hidden)return;
+ if(busy)return pendingReload;
+ if(!configured||byId('adminPanel').hidden)return;
  busy=true;
+ pendingReload=loadAdminData(silent);
+ return pendingReload;
+}
+async function loadAdminData(silent){
  try{
   const [settings,judges,contestants,scores]=await Promise.all([
     get('cv_settings').select('*').eq('id',1).single(),fetchAll('cv_judges'),fetchAll('cv_contestants'),fetchAll('cv_scores')
@@ -112,6 +120,27 @@ function renderSettings(){
 }
 async function mutate(promise,success='操作成功'){
  try{const {error}=await promise;if(error)throw error;await reload(true);toast(success);}catch(e){toast(friendly(e),true)}
+}
+async function setAllStatuses(button){
+ const judges=button.hasAttribute('data-bulk-judges');
+ const enabled=(judges?button.dataset.bulkJudges:button.dataset.bulkContestants)==='true';
+ const action=judges?(enabled?'启用':'停用'):(enabled?'显示':'隐藏');
+ const target=judges?'大众评委':'正式选手';
+ const note=judges&&!enabled?' 停用后，这些评委的历史评分将暂不计入均分。':'';
+ if(!confirm(`确定${action}全部${target}？${note}`))return;
+
+ bulkButtons.forEach(el=>el.disabled=true);
+ try{
+  const update=judges
+   ? get('cv_judges').update({is_active:enabled}).eq('judge_group','undergraduate').neq('is_active',enabled)
+   : get('cv_contestants').update({visible:enabled}).neq('id',testContestantId).neq('visible',enabled);
+  const {error}=await update;
+  if(error)throw error;
+  if(busy)await pendingReload;
+  await reload(true);
+  toast(`已${action}全部${target}`);
+ }catch(error){toast(friendly(error),true)}
+ finally{bulkButtons.forEach(el=>el.disabled=false)}
 }
 async function addJudge(e){
  e.preventDefault();const name=byId('addJudgeName').value.trim(),student_id=byId('addJudgeId').value.trim(),phone=byId('addJudgePhone').value.trim();
@@ -226,6 +255,7 @@ async function init(){
  if(!configured){byId('configWarning').hidden=false;byId('loginBtn').disabled=true;return;}
  try{const {data:{session}}=await db.auth.getSession();if(session)await setLoggedIn();}catch(err){toast(friendly(err),true)}
 }
+bulkButtons.forEach(button=>button.addEventListener('click',()=>setAllStatuses(button)));
 byId('authForm').addEventListener('submit',login);
 byId('refreshBtn').addEventListener('click',()=>reload());
 byId('signOutBtn').addEventListener('click',async()=>{await db.auth.signOut();byId('adminPanel').hidden=true;byId('authPanel').hidden=false;toast('已安全退出')});
