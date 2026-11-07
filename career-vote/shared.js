@@ -1,5 +1,5 @@
-import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.8/+esm';
-import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from './config.js';
+import { createClient } from './vendor-supabase-2.49.8.js';
+import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from './config.js?v=20261108-cn';
 
 export const configured = Boolean(SUPABASE_URL && SUPABASE_PUBLISHABLE_KEY);
 export const db = configured ? createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {

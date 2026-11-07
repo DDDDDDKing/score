@@ -1,4 +1,4 @@
-import {db,configured,byId,escapeHtml,fmt,laneName,typeName,friendly,toast,downloadCSV} from './shared.js';
+import {db,configured,byId,escapeHtml,fmt,laneName,typeName,friendly,toast,downloadCSV} from './shared.js?v=20261108-cn';
 let state={judges:[],contestants:[],scores:[],settings:null}, busy=false, activeTab='overview', detailId=null;
 const get=(table)=>db.from(table);
 const testContestantId='62bf246b-a421-4bb1-9c53-ed8383b0e7fb';

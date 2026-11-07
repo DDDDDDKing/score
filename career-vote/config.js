@@ -1,3 +1,3 @@
 // Public client configuration. Never add server credentials here.
-export const SUPABASE_URL = 'https://rkowumtpicxtsrnotoqc.supabase.co';
-export const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_ELFjHy5tz_3c9amtSYM7tg_bvJc-4AO';
+export const SUPABASE_URL = 'https://spb-bp1ko4vi75shcbds.supabase.opentrust.net';
+export const SUPABASE_PUBLISHABLE_KEY = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYW5vbiIsInJlZiI6InNwYi1icDFrbzR2aTc1c2hjYmRzIiwiaXNzIjoic3VwYWJhc2UiLCJpYXQiOjE3OTQwNjg4MjksImV4cCI6MjEwOTY0NDgyOX0._1qGtBZFsFfXXpdA9u5og6oCTMw8sta1viMBSMWul_M';

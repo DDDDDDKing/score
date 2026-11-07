@@ -1,4 +1,4 @@
-import {db,configured,byId,escapeHtml,fmt,laneName,typeName,rubric,friendly,toast} from './shared.js?v=20261107-rubric';
+import {db,configured,byId,escapeHtml,fmt,laneName,typeName,rubric,friendly,toast} from './shared.js?v=20261108-cn';
 const TOKEN_KEY='xy_career_judge_token_v1';
 let token=null;try{token=localStorage.getItem(TOKEN_KEY)}catch{}
 let candidates=[], submitted=new Map(), activeLane='growth', open=false, current=null, pendingScore=null, submitting=false, refreshing=false, returnFocus=null;
