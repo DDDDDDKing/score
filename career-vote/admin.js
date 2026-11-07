@@ -1,9 +1,9 @@
-import {db,configured,byId,escapeHtml,fmt,groupName,laneName,typeName,friendly,toast,downloadCSV} from './shared.js';
-let state={judges:[],contestants:[],scores:[],settings:null}, busy=false, activeTab='overview';
+import {db,configured,byId,escapeHtml,fmt,laneName,typeName,friendly,toast,downloadCSV} from './shared.js';
+let state={judges:[],contestants:[],scores:[],settings:null}, busy=false, activeTab='overview', detailId=null;
 const get=(table)=>db.from(table);
 async function fetchAll(table){
  const all=[];let from=0;while(true){
-  const {data,error}=await get(table).select('*').range(from,from+999);
+  const {data,error}=await get(table).select('*').order('id').range(from,from+999);
   if(error)throw error;all.push(...data);if(data.length<1000)break;from+=1000;
   if(from>100000)throw Error('记录数量超出单次导出上限');
  }return all;
@@ -35,7 +35,7 @@ async function reload(silent=false){
     get('cv_settings').select('*').eq('id',1).single(),fetchAll('cv_judges'),fetchAll('cv_contestants'),fetchAll('cv_scores')
   ]);
   if(settings.error)throw settings.error;
-  state={settings:settings.data,judges,contestants,scores};render();
+  state={settings:settings.data,judges:judges.filter(j=>j.judge_group==='undergraduate'),contestants,scores};render();
   byId('lastSync').textContent='上次更新：'+new Date().toLocaleTimeString('zh-CN');
   if(!silent)toast('最新数据已同步');
  }catch(err){toast(friendly(err),true)}finally{busy=false}
@@ -43,39 +43,33 @@ async function reload(silent=false){
 function votesFor(id){return state.scores.filter(s=>s.contestant_id===id && state.judges.some(j=>j.id===s.judge_id&&j.is_active));}
 function stats(c){
  const votes=votesFor(c.id);
- const a=state.judges.filter(j=>j.judge_group==='undergraduate'&&j.is_active);
- const b=state.judges.filter(j=>j.judge_group==='graduate'&&j.is_active);
- const u=votes.filter(s=>a.some(j=>j.id===s.judge_id)),g=votes.filter(s=>b.some(j=>j.id===s.judge_id));
- const avg=items=>items.length?items.reduce((sum,s)=>sum+Number(s.total),0)/items.length:null;
- const uavg=avg(u),gavg=avg(g);
- // 大众评委仅占赛事总评分的30%；百分制大众综合分为本研组加权均分。
- const publicContribution=(gavg!==null&&uavg!==null)?gavg*.20+uavg*.10:null;
- const publicAverage=publicContribution===null?null:publicContribution/.30;
- return {uavg,gavg,publicContribution,publicAverage,ucount:u.length,gcount:g.length,utotal:a.length,gtotal:b.length,submitted:votes.length};
+ const average=votes.length ? votes.reduce((sum,score)=>sum+Number(score.total),0)/votes.length : null;
+ return {average,submitted:votes.length,eligible:state.judges.filter(j=>j.is_active).length};
 }
 function render(){
  byId('adminTitle').textContent=state.settings.title;
- renderOverview();renderJudges();renderContestants();renderResults();renderSettings();
+ renderOverview();renderJudges();renderContestants();renderResults();if(detailId)showDetails(detailId,false);renderSettings();
 }
 function renderOverview(){
  const js=state.judges,active=js.filter(j=>j.is_active),acted=active.filter(j=>j.activated_at);
- const s=state.scores.filter(sc=>active.some(j=>j.id===sc.judge_id));
- const items=[['登记评委',js.length,`本科 ${js.filter(j=>j.judge_group==='undergraduate').length} · 研究生 ${js.filter(j=>j.judge_group==='graduate').length}`],
+ const visible=state.contestants.filter(c=>c.visible);
+ const s=visible.flatMap(c=>votesFor(c.id));
+ const items=[['登记评委',js.length,`启用 ${active.length} 人`],
   ['已激活评委',acted.length,`${active.length?Math.round(acted.length/active.length*100):0}% 已激活`],
-  ['参赛选手',state.contestants.length,`成长 ${state.contestants.filter(c=>c.lane==='growth').length} · 就业 ${state.contestants.filter(c=>c.lane==='employment').length}`],
+  ['参赛选手',visible.length,'当前显示'],
   ['完成评分次数',s.length,`理论满额 ${active.length*state.contestants.filter(c=>c.visible).length} 次`]];
  byId('statsGrid').innerHTML=items.map(([n,v,h])=>`<div class="stat"><label>${n}</label><div class="kpi">${v}</div><div class="hint">${h}</div></div>`).join('');
  const total=active.length*state.contestants.filter(c=>c.visible).length,pct=total?Math.min(100,s.length/total*100):0;
  byId('overallProgress').innerHTML=`<div class="progress-line">${s.length} / ${total} 份已提交 <small>${pct.toFixed(1)}% 完成</small></div><div class="progress-track"><div style="width:${pct}%"></div></div><p class="small-note">仅统计当前有效评委与可见选手的评分；每位评委对每位选手最多提交一次。</p>`;
 }
 function renderJudges(){
- const filter=byId('judgeFilter').value,query=byId('judgeSearch').value.trim().toLowerCase();
- const relevant=state.judges.filter(j=>(filter==='all'||j.judge_group===filter)&&(!query||(j.name+' '+j.student_id+' '+j.phone).toLowerCase().includes(query)));
- byId('judgeSummary').textContent=`本科生 ${state.judges.filter(j=>j.judge_group==='undergraduate').length} 人 · 研究生 ${state.judges.filter(j=>j.judge_group==='graduate').length} 人 · 共 ${state.judges.length} 人`;
+ const query=byId('judgeSearch').value.trim().toLowerCase();
+ const relevant=state.judges.filter(j=>(!query||(j.name+' '+j.student_id+' '+j.phone).toLowerCase().includes(query)));
+ byId('judgeSummary').textContent=`共 ${state.judges.length} 人，启用 ${state.judges.filter(j=>j.is_active).length} 人`;
  byId('judgeTable').innerHTML=relevant.map(j=>{
   const count=state.scores.filter(s=>s.judge_id===j.id).length;
-  return `<tr><td><strong>${escapeHtml(j.name)}</strong></td><td class="nowrap">${escapeHtml(j.student_id)}</td><td>${escapeHtml(j.phone)}</td><td>${groupName(j.judge_group)}</td><td><span class="status ${j.activated_at?'yes':'no'}">${j.activated_at?'已激活':'未激活'}</span></td><td>${count}</td><td><span class="status ${j.is_active?'yes':'no'}">${j.is_active?'启用':'停用'}</span></td><td class="nowrap"><button class="btn outline small" data-toggle-judge="${j.id}">${j.is_active?'停用':'启用'}</button>${j.activated_at?`<button class="btn outline small" data-reset-judge="${j.id}">重置登录</button>`:`<button class="btn outline small" data-remove-judge="${j.id}">删除</button>`}</td></tr>`;
- }).join('') || '<tr><td colspan="8">暂无记录</td></tr>';
+  return `<tr><td><strong>${escapeHtml(j.name)}</strong></td><td class="nowrap">${escapeHtml(j.student_id)}</td><td>${escapeHtml(j.phone)}</td><td><span class="status ${j.activated_at?'yes':'no'}">${j.activated_at?'已激活':'未激活'}</span></td><td>${count}</td><td><span class="status ${j.is_active?'yes':'no'}">${j.is_active?'启用':'停用'}</span></td><td class="nowrap"><button class="btn outline small" data-toggle-judge="${j.id}">${j.is_active?'停用':'启用'}</button>${j.activated_at?`<button class="btn outline small" data-reset-judge="${j.id}">重置登录</button>`:`<button class="btn outline small" data-remove-judge="${j.id}">删除</button>`}</td></tr>`;
+ }).join('') || '<tr><td colspan="7">暂无记录</td></tr>';
  byId('judgeTable').querySelectorAll('[data-toggle-judge]').forEach(el=>el.onclick=()=>toggleJudge(el.dataset.toggleJudge));
  byId('judgeTable').querySelectorAll('[data-reset-judge]').forEach(el=>el.onclick=()=>resetJudge(el.dataset.resetJudge));
  byId('judgeTable').querySelectorAll('[data-remove-judge]').forEach(el=>el.onclick=()=>removeJudge(el.dataset.removeJudge));
@@ -88,29 +82,29 @@ function renderContestants(){
  byId('contestantTable').querySelectorAll('[data-delete-c]').forEach(el=>el.onclick=()=>deleteContestant(el.dataset.deleteC));
 }
 function ranked(){
- const rows=state.contestants.map(c=>({c,...stats(c)}));
- // 不同赛道独立排名；任一大众评委组没有有效评分时显示「—」，不把缺项视作0分。
- return rows.sort((a,b)=>a.c.lane.localeCompare(b.c.lane)||(b.publicAverage??-1)-(a.publicAverage??-1)||a.c.display_order-b.c.display_order);
+ return state.contestants.filter(c=>c.visible).map(c=>({c,...stats(c)}))
+  .sort((a,b)=>a.c.lane.localeCompare(b.c.lane)||(b.average??-1)-(a.average??-1)||a.c.display_order-b.c.display_order);
 }
 function renderResults(){
- const lane=byId('resultLane').value;const all=ranked().filter(r=>lane==='all'||r.c.lane===lane);
+ const lane=byId('resultLane').value;
+ const rows=ranked().filter(r=>lane==='all'||r.c.lane===lane);
  let previousLane='',rank=0;
- byId('resultTable').innerHTML=all.map(r=>{
+ byId('resultTable').innerHTML=rows.map(r=>{
   if(r.c.lane!==previousLane){previousLane=r.c.lane;rank=0;}
-  if(r.publicAverage!=null)rank++;
-  const ratio=`本科 ${r.ucount}/${r.utotal} · 研究 ${r.gcount}/${r.gtotal}`;
-  return `<tr><td class="rank">${r.publicAverage==null?'—':rank}</td><td><strong>${escapeHtml(r.c.name)}</strong><div class="small-note">${laneName(r.c.lane)}</div></td><td>${fmt(r.gavg)}</td><td>${fmt(r.uavg)}</td><td class="positive">${fmt(r.publicContribution)}</td><td class="positive">${fmt(r.publicAverage)}</td><td class="nowrap">${ratio}</td><td><button class="btn outline small" data-detail="${r.c.id}">查看</button></td></tr>`;
- }).join('')||'<tr><td colspan="8">暂无成绩</td></tr>';
+  if(r.average!==null)rank++;
+  return `<tr><td class="rank">${r.average===null?'—':rank}</td><td><strong>${escapeHtml(r.c.name)}</strong><div class="small-note">${laneName(r.c.lane)}</div></td><td class="positive">${fmt(r.average)}</td><td>${r.submitted} / ${r.eligible}</td><td><button class="btn outline small" data-detail="${r.c.id}">查看</button></td></tr>`;
+ }).join('')||'<tr><td colspan="5">暂无成绩</td></tr>';
  byId('resultTable').querySelectorAll('[data-detail]').forEach(el=>el.onclick=()=>showDetails(el.dataset.detail));
 }
-function showDetails(id){
+function showDetails(id,scroll=true){
+ detailId=id;
  const candidate=state.contestants.find(c=>c.id===id);if(!candidate)return;
  byId('resultDetails').hidden=false;byId('detailTitle').textContent=candidate.name+' · 评分明细';
  byId('detailTable').innerHTML=state.scores.filter(s=>s.contestant_id===id).map(s=>{
-  const j=state.judges.find(x=>x.id===s.judge_id);return `<tr><td>${escapeHtml(j?.name||'已删除')}</td><td>${escapeHtml(j?.student_id||'')}</td><td>${groupName(j?.judge_group||'')}</td><td>${fmt(s.total)}</td><td>${new Date(s.created_at).toLocaleString('zh-CN')}</td><td><button class="danger-link" data-delete-score="${s.id}">撤销该次评分</button></td></tr>`;
+  const j=state.judges.find(x=>x.id===s.judge_id);return `<tr><td>${escapeHtml(j?.name||'已删除')}</td><td>${escapeHtml(j?.student_id||'')}</td><td>${j?.is_active?'计入均分':'不计入均分'}</td><td>${fmt(s.total)}</td><td>${new Date(s.created_at).toLocaleString('zh-CN')}</td><td><button class="danger-link" data-delete-score="${s.id}">撤销该次评分</button></td></tr>`;
  }).join('')||'<tr><td colspan="6">暂无评分</td></tr>';
  byId('detailTable').querySelectorAll('[data-delete-score]').forEach(el=>el.onclick=()=>deleteScore(el.dataset.deleteScore,id));
- byId('resultDetails').scrollIntoView({behavior:'smooth',block:'nearest'});
+ if(scroll)byId('resultDetails').scrollIntoView({behavior:'smooth',block:'nearest'});
 }
 function renderSettings(){
  const s=state.settings;byId('settingTitle').value=s.title;
@@ -120,9 +114,9 @@ async function mutate(promise,success='操作成功'){
  try{const {error}=await promise;if(error)throw error;await reload(true);toast(success);}catch(e){toast(friendly(e),true)}
 }
 async function addJudge(e){
- e.preventDefault();const name=byId('addJudgeName').value.trim(),student_id=byId('addJudgeId').value.trim(),phone=byId('addJudgePhone').value.trim(),judge_group=byId('addJudgeGroup').value;
+ e.preventDefault();const name=byId('addJudgeName').value.trim(),student_id=byId('addJudgeId').value.trim(),phone=byId('addJudgePhone').value.trim();
  if(!name||!student_id||!phone)return;
- await mutate(get('cv_judges').insert({name,student_id,phone,judge_group}),'评委已添加');
+ await mutate(get('cv_judges').insert({name,student_id,phone,judge_group:'undergraduate'}),'评委已添加');
  byId('addJudgeForm').reset();
 }
 async function toggleJudge(id){const j=state.judges.find(x=>x.id===id);if(!j)return;
@@ -178,15 +172,15 @@ async function readSheet(file,sheetName){
  return window.XLSX.utils.sheet_to_json(sheet,{defval:'',raw:false});
 }
 async function importJudges(){
- const group=byId('importGroup').value,file=byId('judgesExcel').files[0],label=groupName(group);
+ const file=byId('judgesExcel').files[0],label='本科生评委';
  try{
-  const items=(await readSheet(file,label)).map(x=>({name:String(x['姓名']??'').trim(),student_id:String(x['学号']??'').trim(),phone:String(x['电话号码']??'').trim(),judge_group:group})).filter(x=>x.name||x.student_id);
+  const items=(await readSheet(file,label)).map(x=>({name:String(x['姓名']??'').trim(),student_id:String(x['学号']??'').trim(),phone:String(x['电话号码']??'').trim(),judge_group:'undergraduate'})).filter(x=>x.name||x.student_id);
   if(!items.length)throw Error(`${label}工作表内没有数据`);
   for(const j of items)if(!j.name||j.student_id.length<3||!/^\+?[0-9]{6,20}$/.test(j.phone))throw Error(`存在空姓名、无效学号或电话号码：${j.name} / ${j.student_id}`);
   const ids=items.map(j=>j.student_id);if(new Set(ids).size!==ids.length)throw Error('Excel 表内存在重复学号，请先检查');
   const existing=new Map(state.judges.map(j=>[j.student_id,j]));const duplicates=items.filter(j=>existing.has(j.student_id));
-  const conflicts=duplicates.filter(j=>{const old=existing.get(j.student_id);return old.judge_group!==group||old.name!==j.name||old.phone!==j.phone;});
-  if(conflicts.length)throw Error(`已有 ${conflicts.length} 条同学号但姓名/电话/组别不同，请先人工核查：${conflicts.slice(0,4).map(j=>j.student_id).join('、')}`);
+  const conflicts=duplicates.filter(j=>{const old=existing.get(j.student_id);return old.name!==j.name||old.phone!==j.phone;});
+  if(conflicts.length)throw Error(`已有 ${conflicts.length} 条同学号但姓名或电话不同，请先人工核查：${conflicts.slice(0,4).map(j=>j.student_id).join('、')}`);
   const fresh=items.filter(j=>!existing.has(j.student_id));
   if(!confirm(`${label}：表格 ${items.length} 人，其中已存在 ${duplicates.length} 人，新增 ${fresh.length} 人。\n确认批量导入？`))return;
   for(let i=0;i<fresh.length;i+=200){const {error}=await get('cv_judges').insert(fresh.slice(i,i+200));if(error)throw error;}
@@ -212,19 +206,21 @@ async function importContestants(){
  }catch(e){toast(friendly(e),true)}
 }
 function exportResults(){
- const headers=['赛道','姓名','就业类别','研究生评委均分','研究生评分人数','本科生评委均分','本科生评分人数','大众加权分（满分30）','大众综合分（百分制）','成绩是否完整'];
- const data=ranked().map(r=>[laneName(r.c.lane),r.c.name,typeName(r.c.employment_type),r.gavg,r.gcount,r.uavg,r.ucount,r.publicContribution,r.publicAverage,r.publicAverage==null?'待补齐':'完整']);
- downloadCSV('大赛成绩汇总.csv',[headers,...data]);
+ const headers=['赛道','姓名','平均分（满分100）','有效提交人数','启用评委人数'];
+ const rows=ranked().map(r=>[laneName(r.c.lane),r.c.name,r.average,r.submitted,r.eligible]);
+ downloadCSV('大赛成绩汇总.csv',[headers,...rows]);
 }
 function exportDetails(){
- const rows=state.scores.map(s=>{const c=state.contestants.find(x=>x.id===s.contestant_id),j=state.judges.find(x=>x.id===s.judge_id);
- return [laneName(c?.lane),c?.name||'',groupName(j?.judge_group),j?.name||'',j?.student_id||'',s.total,JSON.stringify(s.breakdown),s.created_at,j?.is_active?'有效':'已停用'];
- });
- downloadCSV('大赛评分明细.csv',[['赛道','参赛选手','评委组','评委姓名','学号','总分','分项评分','提交时间','评委状态'],...rows]);
+ const rows=ranked().flatMap(({c})=>state.scores.filter(s=>s.contestant_id===c.id).map(s=>{
+  const judge=state.judges.find(j=>j.id===s.judge_id);
+  return [laneName(c.lane),c.name,judge?.name||'',judge?.student_id||'',s.total,JSON.stringify(s.breakdown),s.created_at,judge?.is_active?'计入均分':'不计入均分'];
+ }));
+ downloadCSV('大赛评分明细.csv',[['赛道','参赛选手','评委姓名','学号','总分','分项评分','提交时间','统计状态'],...rows]);
 }
 function showTab(tab){activeTab=tab;
  document.querySelectorAll('.admin-tabs button').forEach(el=>el.classList.toggle('selected',el.dataset.tab===tab));
  document.querySelectorAll('.tab-section').forEach(el=>el.hidden=el.id!==`tab-${tab}`);
+ if(tab==='results')reload(true);
 }
 async function init(){
  if(!configured){byId('configWarning').hidden=false;byId('loginBtn').disabled=true;return;}
@@ -236,15 +232,14 @@ byId('signOutBtn').addEventListener('click',async()=>{await db.auth.signOut();by
 document.querySelectorAll('.admin-tabs button').forEach(el=>el.addEventListener('click',()=>showTab(el.dataset.tab)));
 byId('addJudgeForm').addEventListener('submit',addJudge);
 byId('judgeSearch').addEventListener('input',renderJudges);
-byId('judgeFilter').addEventListener('change',renderJudges);
 byId('importJudgeBtn').addEventListener('click',importJudges);
 byId('addContestantForm').addEventListener('submit',addContestant);
 byId('contestantLane').addEventListener('change',()=>byId('employmentTypeWrap').hidden=byId('contestantLane').value!=='employment');
 byId('importContestantBtn').addEventListener('click',importContestants);
 byId('resultLane').addEventListener('change',renderResults);
-byId('hideDetails').addEventListener('click',()=>byId('resultDetails').hidden=true);
+byId('hideDetails').addEventListener('click',()=>{detailId=null;byId('resultDetails').hidden=true});
 byId('exportResults').addEventListener('click',exportResults);
 byId('exportDetails').addEventListener('click',exportDetails);
 byId('settingsForm').addEventListener('submit',saveSettings);
-setInterval(()=>{if(!byId('adminPanel').hidden&&document.visibilityState==='visible'&&activeTab!=='settings'&&activeTab!=='contestants')reload(true)},15000);
+setInterval(()=>{if(!byId('adminPanel').hidden&&document.visibilityState==='visible'&&activeTab!=='settings'&&activeTab!=='contestants')reload(true)},3000);
 init();

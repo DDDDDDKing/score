@@ -1,4 +1,4 @@
-import {db,configured,byId,escapeHtml,fmt,groupName,laneName,typeName,rubric,friendly,toast} from './shared.js';
+import {db,configured,byId,escapeHtml,fmt,laneName,typeName,rubric,friendly,toast} from './shared.js?v=20261107-rubric';
 const TOKEN_KEY='xy_career_judge_token_v1';
 let token=null;try{token=localStorage.getItem(TOKEN_KEY)}catch{}
 let candidates=[], submitted=new Map(), activeLane='growth', open=false, current=null, pendingScore=null, submitting=false, refreshing=false, returnFocus=null;
@@ -97,7 +97,7 @@ async function activate(e){
 async function enter(){
  const who=await rpc('cv_whoami',{p_token:token});
  if(!who?.length){switchPanel(false);throw Error('此浏览器的评委凭证已失效。请重新输入姓名、学号和电话号码登录')}
- byId('greeting').textContent=who[0].judge_name;byId('groupTag').textContent=groupName(who[0].judge_group);
+ byId('greeting').textContent=who[0].judge_name;
  switchPanel(true);await refreshSubmissions();
 }
 function markSaved(score){
